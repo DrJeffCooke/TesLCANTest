@@ -10,9 +10,11 @@
  - 'r n nnnn' start repeating predefined frame n every nnnn miliseconds
  - 'r n 0' stop repeating predefined frame n
  - 'c 0/1' 1 to start CAN frame capture (and CSV output), 0 to stop
+ - '?' to reshow the instructions
 
  Coding Todos
  - interpretation of CAN codes heard on the TesLorean CAN network (predefined subsets of CAN traffic on/off)
+ - Change the Baud rate
 
  Coding Notes
  - delay(1) needed to allow the Serial port to catch up with the microcontroller
@@ -55,11 +57,14 @@ void setup()
 
   // Startup CAN  TesLorean bus
   can0.reset();
-  can0.setBitrate(CAN_500KBPS);
+  can0.setBitrate(CAN_1000KBPS);
   can0.setNormalMode();
   #ifdef debug
-    Serial.println("Test CANbus initialized (500 kbps)");
+    Serial.println("Test CANbus initialized (1000 kbps)");
   #endif
+
+  // Output the instructions for frames
+  outputInstructions();
 
   // Populate a number of pre-built CAN frames
   buildCANframe(CANPkg[0],0x000,8,0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07);
@@ -75,6 +80,19 @@ void setup()
     CANTimes[t] = 0;       // init to 0 so always triggers immediately if set
   }
   
+}
+
+// Print out the instructions
+void outputInstructions()
+{
+  Serial.println("Instructions");  
+  Serial.println("'p n' where n is 0..4  // Sends the predefined frame number n immediately once");
+  Serial.println("'f id b1 b2 b3 b4 b5 b6 b7 b8' send a frame with ID and 0..8 bytes, HEX entries should be 0xNN");
+  Serial.println("'q n id b1 b2 b3 b4 b5 b6 b7 b8' load a frame into predefined n with ID and 0..8 bytes, HEX entries should be 0xNN");
+  Serial.println("'r n nnnn' start repeating predefined frame n every nnnn miliseconds");
+  Serial.println("'r n 0' stop repeating predefined frame n");
+  Serial.println("'c 0/1' 1 to start CAN frame capture (and CSV output), 0 to stop");
+  Serial.println("'?' to reshow the instructions");
 }
 
 // Populate the CAN frame with the data specified
@@ -97,13 +115,13 @@ void buildCANframe(can_frame & frame, uint16_t cid, uint8_t bcnt, uint8_t b0, ui
 void outputCANframe(can_frame & frame)
 {
   // Send frame to the Serial Port
-  Serial.print("CAN frame : ");
+  Serial.print("CAN frame : 0x");
   Serial.print(frame.can_id,HEX);
   Serial.print(" - ");
   for (int i=0;i<frame.can_dlc;i++)
   {
+    Serial.print(" 0x");
     Serial.print(frame.data[i],HEX);
-    Serial.print(" ");
   }
   Serial.println();  
 }
@@ -117,6 +135,7 @@ int parseHexInt()
     char hexes[23] = {'0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F','x','a','b','c','d','e','f'};
     int hexnm[23] = {0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,0,10,11,12,13,14,15};
     char deces[10] = {'0','1','2','3','4','5','6','7','8','9'};
+    int decnm[10] = {0,1,2,3,4,5,6,7,8,9};
 
     char token[20] = {0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0};
     int numtok = 0;             // number of token chars
@@ -129,92 +148,161 @@ int parseHexInt()
     bool hexnot = false;        // Found hex 'x' notation
     bool inttok = true;        // Does this comply with DEC notation?
     bool spctok = true;         // still stripping leading spaces
+    bool errtok = false;        // Indicates if an error was detected, i.e. a non-DEC or HEX value
 
     while (!timedout && numchar)
     {
-        if (Serial.available() > 0)
+      if (Serial.available() > 0)
+      {
+        nextchar = Serial.read();
+        timesincechar = millis();   // Set the timer for when the character was received
+        
+        // If newline found, just end the token read
+        if (nextchar == 10)
         {
-            nextchar = Serial.read();
-            
-            // test for hex compliance
-            bool hexcom = false;
-            for (int i=0;i<23;i++)
-            {
-                if (nextchar == hexes[i]){hexcom = true;}
-            }
-            if (!hexcom) {hextok = false;}
-
-            // test for positive integer compliance
-            bool deccom = false;
-            for (int j=0;j<10;j++)
-            {
-                if (nextchar == deces[j]){deccom = true;}
-            }
-            if (!deccom) {dectok = false;}
-            
-            // If compliant, store the character
-            if (hexcom || deccom)
-            {
-                token[numtok++] = nextchar;
-                
-                if (nextchar == 'x'){hexnot = true;}
-            }
-            else
-            {
-                // Test if a leading space (ignored)
-                if ((spctok && nextchar != ' ') || (!spctok && nextchar == ' '))
-                {
-                    // don't read any more characters
-                    numchar = false;
-                }
-          
-            }
+          numchar = false;
         }
         else
         {
-            // Test timeout
-            if (timesincechar < (millis() - PARSE_TIMEOUT)){timedout = true;}
-        }
-    }
+          // If not clearing leading spaces, and see a space, stop reading characters
+          if (!spctok && nextchar == ' ')
+          {
+            numchar = false;
+          }
+          else
+          {
+            // If stripping spaces, and space found, just skip the character checks
+            if (spctok && nextchar == ' ')
+            {
+              // Skipping the space by not processing
+            }
+            else
+            {
+              // If stripping leading spaces, and you find a non-space, stop ignoring leading spaces
+              if (spctok && nextchar != ' ')
+              {
+                // Stop ignoring leading spaces
+                spctok = false;
+              }
     
-    // Process if HEX was captured in the scan, must have the 0xNN notation to be recognized as HEX
-    if (hexnot && hextok)
+              // test for hex compliance
+              bool hexcom = false;
+              for (int i=0;i<23;i++)
+              {
+                  if (nextchar == hexes[i]){hexcom = true;}
+              }
+              if (!hexcom)
+              {
+                hextok = false;
+              }
+              else
+              {
+                // Test if this could be a hex notation value '0xNN'
+                if (numtok == 1 && nextchar == 'x')
+                {
+                  hexnot = true;
+                }
+
+                // Throw an error if the 'x' is in the wrong place
+                if (numtok != 1 && nextchar == 'x')
+                {
+                  hexnot = false;
+                  errtok = true;
+                }
+              }
+                  
+              // test for positive integer compliance
+              bool deccom = false;
+              for (int j=0;j<10;j++)
+              {
+                  if (nextchar == deces[j]){deccom = true;}
+              }
+              if (!deccom)
+              {
+                dectok = false;
+              }
+              
+              // If compliant, store the character
+              if (hexcom || deccom)
+              {
+                  // Capture the character
+                  token[numtok] = nextchar;
+                  numtok = numtok + 1;
+              }
+              else
+              {
+                // Flag an error as a non-valid character was located
+                errtok = true;
+              }
+            }
+          }
+        }
+      }
+      else
+      {
+          // Test timeout
+          if (timesincechar < (millis() - PARSE_TIMEOUT))
+          {timedout = true;}
+      }
+    } // end of While
+
+    // Check that a valid hex notation was received
+    if (hextok && !hexnot && !dectok)
     {
-        result = 0;
-        for (int k=0;k<numtok;k++)
+      // Looks like a HEX notation, but no 'x' found
+      errtok = true;
+    }
+
+    if (!errtok)
+    {
+    
+      // Process if HEX was captured in the scan, must have the 0xNN notation to be recognized as HEX
+      if (hexnot && hextok)
+      {
+          result = 0;
+          for (int k=0;k<numtok;k++)
+          {
+              if (token[k] != 'x')
+              {
+                  int d = 0;
+                  for (int n=0;n<23;n++)
+                  {
+                      if (hexes[n] == token[k])
+                      {
+                          d = hexnm[n];
+                      }
+                  }
+                  result = (result * 16) + d;
+              }
+          }
+      }
+      else
+      {
+        // Process if DEC was captured in the scan
+        if (dectok)
         {
-            if (token[k] != 'x')
+            result = 0;
+            for (int k=0;k<numtok;k++)
             {
                 int d = 0;
-                for (int n=0;n<23;n++)
+                for (int n=0;n<10;n++)
                 {
-                    if (hexes[n] == token[k])
+                    if (deces[n] == token[k])
                     {
-                        d = n;
+                        d = decnm[n];
                     }
                 }
-                result = (result * 16) + d;
+                result = (result * 10) + d;
             }
         }
+      }
     }
-    
-    // Process if DEC was captured in the scan
-    if (dectok)
+    else
     {
-        result = 0;
-        for (int k=0;k<numtok;k++)
-        {
-            int d = 0;
-            for (int n=0;n<10;n++)
-            {
-                if (deces[n] == token[k])
-                {
-                    d = n;
-                }
-            }
-            result = (result * 10) + d;
-        }
-    }  
+      // Error detected (non-DEC and non-HEX compliance)
+      result = -1;
+    }
+
     return result;
 }
 
@@ -231,6 +319,13 @@ void loop()
   {
 
     receivedChar = Serial.read();
+
+    // Check for preprepared frame
+    if (receivedChar == '?')
+    {
+      // Output the instructions for frames
+      outputInstructions();
+    } // end of '?'
     
     // Check for preprepared frame
     if (receivedChar == 'p')
@@ -335,37 +430,61 @@ void loop()
     {
       bool fsuc = false;    // at least some frame ID found
       bool bfin = false;   // No more byte data available
+      bool ferr = false;    // error detected in the input data
       int bcnt = 0;         // number of data bytes found
       delay(1);
       
       if (Serial.available() > 0)
       {
-        // Grab the ID for the frame
-        outgoing.can_id = parseHexInt();
-        fsuc = true;
-        
-        // There could another 8 data entries for the frame
-        for (int i = 0; i < 8; i++)
+        // Fetch value and check for error
+        int canidtemp = 0;
+        canidtemp = parseHexInt();
+        if (canidtemp >= 0)
         {
-          if (!bfin)
+          // Grab the ID for the frame
+          outgoing.can_id = canidtemp;
+          fsuc = true;
+          
+          // There could another 8 data entries for the frame
+          for (int i = 0; i < 8; i++)
           {
-            delay(1);
-            if (Serial.available() > 0)
+            if (!bfin)
             {
-              outgoing.data[i] = parseHexInt();
-              bcnt = i + 1;
-            }
-            else
-            {
-              bfin = true;      // Flag that no more bytes were found
+              delay(1);
+              if (Serial.available() > 0)
+              {
+                int datavaluetemp = 0;
+                datavaluetemp = parseHexInt();
+                if (datavaluetemp >= 0)
+                {
+                  outgoing.data[i] = datavaluetemp;
+                  bcnt = i + 1;
+                }
+                else
+                {
+                  // Record error
+                  ferr = true;
+                  Serial.print("Error in frame byte ");
+                  Serial.println(i,DEC);
+                }
+              }
+              else
+              {
+                bfin = true;      // Flag that no more bytes were found
+              }
             }
           }
+          outgoing.can_dlc = bcnt;        // Set the number of data bytes in the CAN frame
         }
-        outgoing.can_dlc = bcnt;        // Set the number of data bytes in the CAN frame
+        else
+        {
+          ferr = true;
+          Serial.println("Error detected in input CAN ID.");
+        }  // end of error check
       }
       
       // Output status of the frame input
-      if (fsuc)
+      if (fsuc and !ferr)
       {
         Serial.println("CAN Frame sent...");
         can0.sendMessage(&outgoing);
@@ -383,6 +502,7 @@ void loop()
     {
       bool fsuc = false;    // at least some frame ID found
       bool bfin = false;   // No more byte data available
+      bool ferr = false;    // indicates an error found in input
       int bcnt = 0;         // number of data bytes found
       int rNum = 0;         // number of predefined entry to replace
       delay(1);
@@ -395,32 +515,53 @@ void loop()
         // Check that entry is within range
         if ((rNum >= 0) && (rNum < PreDefinedFrames))
         {
-
           delay(1);
           if (Serial.available() > 0)
           {
             // Grab the ID for the frame
-            CANPkg[rNum].can_id = parseHexInt();
-            fsuc = true; // Sufficient frame data found
-        
-            // There could another 8 data entries for the frame
-            for (int i = 0; i < 8; i++)
+            int canidtemp = 0;
+            canidtemp = parseHexInt();
+            if (canidtemp >= 0)
             {
-              if (!bfin)
+              CANPkg[rNum].can_id = canidtemp;
+              fsuc = true; // Sufficient frame data found
+          
+              // There could another 8 data entries for the frame
+              for (int i = 0; i < 8; i++)
               {
-                delay(1);
-                if (Serial.available() > 0)
+                if (!bfin)
                 {
-                  CANPkg[rNum].data[i] = parseHexInt();
-                  bcnt = i + 1;
-                }
-                else
-                {
-                  bfin = true;      // Flag that no more bytes were found
+                  delay(1);
+                  if (Serial.available() > 0)
+                  {
+                    int datavaluetemp = 0;
+                    datavaluetemp = parseHexInt();
+                    if (datavaluetemp >= 0)
+                    {
+                      CANPkg[rNum].data[i] = datavaluetemp;
+                      bcnt = i + 1;
+                    }
+                    else
+                    {
+                      // Record error
+                      ferr = true;
+                      Serial.print("Error in frame byte ");
+                      Serial.println(i,DEC);
+                    }
+                  }
+                  else
+                  {
+                    bfin = true;      // Flag that no more bytes were found
+                  }
                 }
               }
+              CANPkg[rNum].can_dlc = bcnt;        // Set the number of data bytes in the CAN frame
             }
-            CANPkg[rNum].can_dlc = bcnt;        // Set the number of data bytes in the CAN frame
+            else
+            {
+              ferr = true;
+              Serial.println("Error detected in input CAN ID.");
+            }  // end of error check
           }
         }
         else
@@ -432,10 +573,10 @@ void loop()
       }
       
       // Output status of the frame input
-      if (fsuc)
+      if (fsuc && !ferr)
       {
         Serial.println("CAN Frame loaded...");
-        outputCANframe(outgoing);      
+        outputCANframe(CANPkg[rNum]);      
       }
       else
       {

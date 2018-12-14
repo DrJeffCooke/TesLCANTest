@@ -5,11 +5,15 @@
  
  Instructions
  - 'p n' where n is 0..4  // Sends the predefined frame number n immediately once
- - 'f id b1 b2 b3 b4 b5 b6 b7 b8' send a frame with ID and 0..8 bytes, HEX entries should be 0xNN
+ - 's id b1 b2 b3 b4 b5 b6 b7 b8' send a frame with ID and 0..8 bytes, HEX entries should be 0xNN
  - 'q n id b1 b2 b3 b4 b5 b6 b7 b8' load a frame into predefined n with ID and 0..8 bytes, HEX entries should be 0xNN
  - 'r n nnnn' start repeating predefined frame n every nnnn miliseconds
  - 'r n 0' stop repeating predefined frame n
  - 'c 0/1' 1 to start CAN frame capture (and CSV output), 0 to stop
+ - 'm 0/1 0xnnnn'  to set ID mask 0 or 1 to 0xNNNN, with value nnnn
+ - 'm 0/1 0' to clear mask 0 or 1
+ - 'f 0..5 0xnnnn' to set the filter 0..1 for Mask 0, and 2..5 for Mask 1, with value nnnn
+ - 'f 0..5 0' to clear filter 0..5
  - '?' to reshow the instructions
 
  Coding Todos
@@ -79,19 +83,22 @@ void setup()
     CANDurs[t] = 0;        // Zero denotes an inactive timer
     CANTimes[t] = 0;       // init to 0 so always triggers immediately if set
   }
-  
-}
+}  // end of Setup
 
 // Print out the instructions
 void outputInstructions()
 {
   Serial.println("Instructions");  
   Serial.println("'p n' where n is 0..4  // Sends the predefined frame number n immediately once");
-  Serial.println("'f id b1 b2 b3 b4 b5 b6 b7 b8' send a frame with ID and 0..8 bytes, HEX entries should be 0xNN");
+  Serial.println("'s id b1 b2 b3 b4 b5 b6 b7 b8' send a frame with ID and 0..8 bytes, HEX entries should be 0xNN");
   Serial.println("'q n id b1 b2 b3 b4 b5 b6 b7 b8' load a frame into predefined n with ID and 0..8 bytes, HEX entries should be 0xNN");
   Serial.println("'r n nnnn' start repeating predefined frame n every nnnn miliseconds");
   Serial.println("'r n 0' stop repeating predefined frame n");
   Serial.println("'c 0/1' 1 to start CAN frame capture (and CSV output), 0 to stop");
+  Serial.println("'m 0/1 0xnnnn'  to set ID mask 0 or 1 to 0xNNNN, with value nnnn");
+  Serial.println("'m 0/1 0' to clear mask 0 or 1");
+  Serial.println("'f 0..5 0xnnnn' to set the filter 0..1 for Mask 0, and 2..5 for Mask 1, with value nnnn");
+  Serial.println("'f 0..5 0' to clear filter 0..5");
   Serial.println("'?' to reshow the instructions");
 }
 
@@ -425,8 +432,134 @@ void loop()
       }
     }    // end of 'r'
 
-    // Check for full specified frame
+    // Check for Mask setup request
+    if (receivedChar == 'm')
+    {
+      delay(1);
+      if (Serial.available() > 0)
+      {
+        receivedNum = Serial.parseInt();
+
+        // Only masks are 0 and 1
+        if ((receivedNum == 0) || (receivedNum == 1))
+        {
+          // Fetch the mask value
+          unsigned long mask = 0;
+          delay(1);
+          if (Serial.available() > 0)
+          {
+            mask = parseHexInt();
+
+            // Check that mask is valid and assign to CANBUS
+            if (mask != -1)
+            {
+              MCP2515::MASK rxMask;
+              if (receivedNum==0){rxMask = MCP2515::MASK0;}
+              else {rxMask = MCP2515::MASK1;}
+
+              can0.setConfigMode();
+              if (can0.setFilterMask(rxMask,0,(uint32_t)mask) != MCP2515::ERROR_OK)
+              {
+                Serial.println("Mask was not set successfully.");
+                mask = -1;
+              }
+              can0.setNormalMode();
+            }
+            else
+            {
+              Serial.println("Mask value not recognized as a valid value."); 
+            }
+
+            if (mask == 0)
+            {
+              Serial.print("Mask ");
+              Serial.print(receivedNum, DEC);
+              Serial.println(" cleared.");
+            }
+            if (mask != -1 && mask > 0)
+            {
+              // Send frame to the Serial Port
+              Serial.print("Mask ");
+              Serial.print(receivedNum, DEC);
+              Serial.print(" set to 0x");
+              Serial.println(mask, HEX);
+            }
+          }
+        }
+        else
+        {
+          Serial.print("Error: Only Mask 0 or 1 can be defined.");
+        }
+      }
+    }    // end of 'm'
+    
+    // Check for Filter setup request
     if (receivedChar == 'f')
+    {
+      delay(1);
+      if (Serial.available() > 0)
+      {
+        receivedNum = Serial.parseInt();
+
+        // Only masks are 0 and 1
+        if ((receivedNum >= 0) || (receivedNum <= 5))
+        {
+          // Fetch the filter value
+          unsigned long filter = 0;
+          delay(1);
+          if (Serial.available() > 0)
+          {
+            filter = parseHexInt();
+
+            // Check that mask is valid and assign to CANBUS
+            if (filter != -1)
+            {
+              MCP2515::RXF rxFilter;
+              if (receivedNum == 0){rxFilter = MCP2515::RXF0;}
+              if (receivedNum == 1){rxFilter = MCP2515::RXF1;}
+              if (receivedNum == 2){rxFilter = MCP2515::RXF2;}
+              if (receivedNum == 3){rxFilter = MCP2515::RXF3;}
+              if (receivedNum == 4){rxFilter = MCP2515::RXF4;}
+              if (receivedNum == 5){rxFilter = MCP2515::RXF5;}
+
+              can0.setConfigMode();
+              if (can0.setFilter(rxFilter, 0,(uint32_t)filter) != MCP2515::ERROR_OK)
+              {
+                Serial.println("Filter setting returned an error.");
+                filter = -1;
+              }
+              can0.setNormalMode();
+            }
+            else
+            {
+              Serial.println("Filter value not recognized as a valid value.");
+            }
+
+            if (filter == 0)
+            {
+              Serial.print("Filter ");
+              Serial.print(receivedNum, DEC);
+              Serial.println(" cleared.");
+            }
+            if (filter != -1 && filter > 0)
+            {
+              // Send frame to the Serial Port
+              Serial.print("Filter ");
+              Serial.print(receivedNum, DEC);
+              Serial.print(" set to 0x");
+              Serial.println(filter, HEX);
+            }
+          }
+        }
+        else
+        {
+          Serial.print("Error: Only Filters 0..5 can be defined.");
+        }
+      }
+    }    // end of 'f'
+    
+    // Check for full specified frame
+    if (receivedChar == 's')
     {
       bool fsuc = false;    // at least some frame ID found
       bool bfin = false;   // No more byte data available
@@ -495,7 +628,7 @@ void loop()
         Serial.println("No CAN Frame sent...");
       }
 
-    }  // end of 'f'
+    }  // end of 's'
 
     // Check for frame to load into predefined array
     if (receivedChar == 'q')
@@ -618,7 +751,7 @@ void loop()
     {
 
       // Output FRAME ID and bytes in CSV format
-      Serial.print("IN,");
+      Serial.print("IN,0x");
       Serial.print(incoming.can_id, HEX); // print ID
       Serial.print(","); 
       Serial.print(incoming.can_dlc, DEC); // print DLC
@@ -626,6 +759,7 @@ void loop()
 
       for (int i = 0; i < incoming.can_dlc; i++)
       {
+        Serial.print("0x");
         Serial.print(incoming.data[i],HEX);
         Serial.print(",");
       }

@@ -25,3 +25,7 @@ Works just like parseInt(), except that it can also accept values input as hex v
 Notes of Masks and Filters in the MCP2515 CAN chip
 ==================================================
 Best explanation of how to set Masks and Filters, here... https://www.microchip.com/forums/m456043.aspx
+
+DEVELOPMENT NOTES
+=================
+- The capture command "c 1" will miss frames when the data transmission rate is very high (e.g. 1000KBPS).  This is because the frames come in faster than the microcontroller can capture and handle them - especially if Serial.print() is used. The test code in the CANTestToolInterrupt addresses the problem by using Interrupts and Circular Queue.  The CANSender_Tool.ino still needs to be updated to use the interrupt/queue method.

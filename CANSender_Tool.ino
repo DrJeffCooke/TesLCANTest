@@ -14,6 +14,7 @@
  - 'm 0/1 0' to clear mask 0 or 1
  - 'f 0..5 0xnnnn' to set the filter 0..1 for Mask 0, and 2..5 for Mask 1, with value nnnn
  - 'f 0..5 0' to clear filter 0..5
+ - 'b nnnn' to set baud rate in KBPS, so 1000 = 1MBPS, 500 = 500KBPS, 250, 200, 125, 100, etc.
  - '?' to reshow the instructions
 
  Coding Todos
@@ -28,11 +29,23 @@
 #include <mcp2515.h>
 #include <SPI.h>
 
+// CAN board Chip Select (CS) pins
+#define BATTERY_CAN_CS 10
+#define TESLOREAN_CAN_CS 9
+
+// DEFINE
+#define StoredFrames 50
+
+// Array for preprepared CAN frames
+can_frame CANFrames[StoredFrames];
+
+// Counters tracking the add point and read point in the circular array
+volatile uint8_t addPointFrames = 0;
+volatile uint8_t readPointFrames = 0;
+volatile uint16_t netAddReadCount = 0;   // Adds increment, Reads decrement, only Read if <> 0
+
 // DEFINE
 #define PreDefinedFrames 5
-
-// Create the CAN object for transmission
-MCP2515 can0(10);     // CS on digital pin 10
 
 // Array for preprepared CAN frames
 can_frame CANPkg[PreDefinedFrames];
@@ -44,6 +57,37 @@ bool CANread = false;     // Indicates if CAN frames should be captured and outp
 
 // Define the debug variable
 #define debug 1
+
+// Create the CAN object for transmission
+MCP2515 can0(10);     // BATTERY CAN - CS on digital pin 10
+MCP2515 can1(9);      // TESLOREAN CAN - CS on digital pin 9
+
+void irqBATHandler()
+{
+  uint8_t irq = can0.getInterrupts();
+
+  // check channel 0
+  if (irq & MCP2515::CANINTF_RX0IF)
+  {
+    if (can0.readMessage(MCP2515::RXB0, &CANFrames[addPointFrames]) == MCP2515::ERROR_OK)
+    {
+        // frame contains received from RXB0 message
+        addPointFrames = (addPointFrames + 1) % StoredFrames;
+        netAddReadCount++;
+    }
+  }
+            
+  // check channel 1
+  if (irq & MCP2515::CANINTF_RX1IF)
+  {
+    if (can0.readMessage(MCP2515::RXB1, &CANFrames[addPointFrames]) == MCP2515::ERROR_OK)
+    {
+      // frame contains received from RXB1 message
+      addPointFrames = (addPointFrames + 1) % StoredFrames;
+      netAddReadCount++;
+    }
+  } 
+}
 
 void setup()
 {
@@ -59,14 +103,30 @@ void setup()
   // init the SPI communications
   SPI.begin();
 
-  // Startup CAN  TesLorean bus
+  // Startup CAN  Battery bus
   can0.reset();
   can0.setBitrate(CAN_1000KBPS);
   can0.setNormalMode();
   #ifdef debug
-    Serial.println("Test CANbus initialized (1000 kbps)");
+    Serial.println("Test CANbus 0 initialized (1000 kbps)");
   #endif
 
+  // Startup CAN  TesLorean bus
+  can1.reset();
+  can1.setBitrate(CAN_1000KBPS);
+  can1.setNormalMode();
+  #ifdef debug
+    Serial.println("Test CANbus 1 initialized (1000 kbps)");
+  #endif
+
+  // Initialize the array pointers
+  addPointFrames = 0;
+  readPointFrames = 0;
+  netAddReadCount = 0;
+
+  // Set up the interrupt to capture incoming CAN frames
+  attachInterrupt(digitalPinToInterrupt(2), irqBATHandler, LOW);
+  
   // Output the instructions for frames
   outputInstructions();
 
@@ -99,6 +159,7 @@ void outputInstructions()
   Serial.println("'m 0/1 0' to clear mask 0 or 1");
   Serial.println("'f 0..5 0xnnnn' to set the filter 0..1 for Mask 0, and 2..5 for Mask 1, with value nnnn");
   Serial.println("'f 0..5 0' to clear filter 0..5");
+  Serial.println("'b nnnn' to set baud rate in KBPS, so nnnn = 1000 is 1MBPS, 500 is 500KBPS, 250, 200, 125, 100, etc.");
   Serial.println("'?' to reshow the instructions");
 }
 
@@ -388,6 +449,49 @@ void loop()
         Serial.println("Error: Need to specify 0 - stop or 1 - start frame capture.");
       }
     }    // end of 'c'
+
+    // Set the baud rate
+    if (receivedChar == 'b')
+    {
+      delay(1);
+      if (Serial.available() > 0)
+      {
+        receivedNum = Serial.parseInt();
+
+        if (receivedNum == 1000 || receivedNum == 500 || receivedNum == 250 || receivedNum == 200 || receivedNum == 125 || receivedNum == 100)
+        {
+          MCP2515::ERROR canError;
+          canError = MCP2515::ERROR_OK;
+          can0.setConfigMode();
+          
+          if(receivedNum == 1000){canError = can0.setBitrate(CAN_1000KBPS);}
+          if(receivedNum == 500){canError = can0.setBitrate(CAN_500KBPS);}
+          if(receivedNum == 250){canError = can0.setBitrate(CAN_250KBPS);}
+          if(receivedNum == 200){canError = can0.setBitrate(CAN_200KBPS);}
+          if(receivedNum == 125){canError = can0.setBitrate(CAN_125KBPS);}
+          if(receivedNum == 100){canError = can0.setBitrate(CAN_100KBPS);}
+          
+          if (canError == MCP2515::ERROR_OK)
+          {
+            Serial.print("Baud rate set to ");
+            Serial.println(receivedNum, DEC);
+          }
+          else
+          {
+            Serial.print("Error : Baud rate unchanged.");
+          }
+          can0.setNormalMode();
+        }
+        else
+        {
+          Serial.println("Enter a valid baud rate (BPS). Values are 1000, 500, 250, 200, 125, and 100.");
+        }
+      }
+      else
+      {
+        Serial.println("Error: Need to specify a baud rate in BPS.");
+      }
+    }    // end of 'b'
 
     // Check for repeat start/stop requests
     if (receivedChar == 'r')
@@ -746,24 +850,15 @@ void loop()
   // Receive CAN frame check
   if (CANread)
   {
-    // check if frame waiting
-    if (can0.readMessage(&incoming) == MCP2515::ERROR_OK)
+    // Output a captured frame
+    if (netAddReadCount > 0)
     {
-
-      // Output FRAME ID and bytes in CSV format
-      Serial.print("IN,0x");
-      Serial.print(incoming.can_id, HEX); // print ID
-      Serial.print(","); 
-      Serial.print(incoming.can_dlc, DEC); // print DLC
-      Serial.print(",");
-
-      for (int i = 0; i < incoming.can_dlc; i++)
+      if (readPointFrames != addPointFrames)
       {
-        Serial.print("0x");
-        Serial.print(incoming.data[i],HEX);
-        Serial.print(",");
+        outputCANframe(CANFrames[readPointFrames]);
+        readPointFrames = (readPointFrames + 1) % StoredFrames;
+        if(netAddReadCount > 0){netAddReadCount--;}
       }
-      Serial.println();      
     }
   }    // end of message capture  
 }

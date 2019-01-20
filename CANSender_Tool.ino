@@ -59,6 +59,8 @@ bool CANread = false;     // Indicates if CAN frames should be captured and outp
 #define debug 1
 
 // Create the CAN object for transmission
+//pinMode(9, OUTPUT);
+//pinMode(10, OUTPUT);
 MCP2515 can0(10);     // BATTERY CAN - CS on digital pin 10
 MCP2515 can1(9);      // TESLOREAN CAN - CS on digital pin 9
 
@@ -103,6 +105,13 @@ void setup()
   // init the SPI communications
   SPI.begin();
 
+  // Output the instructions for frames
+  outputInstructions();
+
+  // Initialize pins being used for interrups
+  pinMode(2, INPUT);
+  pinMode(3, INPUT);
+
   // Startup CAN  Battery bus
   can0.reset();
   can0.setBitrate(CAN_1000KBPS);
@@ -112,11 +121,11 @@ void setup()
   #endif
 
   // Startup CAN  TesLorean bus
-  can1.reset();
-  can1.setBitrate(CAN_1000KBPS);
+//  can1.reset();                   //!!!!!!!  BUG in LIBRARY  !!!! Calling .reset() on the second can object causes the first to become unstable !!!!
+  can1.setBitrate(CAN_500KBPS);
   can1.setNormalMode();
   #ifdef debug
-    Serial.println("Test CANbus 1 initialized (1000 kbps)");
+    Serial.println("Test CANbus 1 initialized (500 kbps)");
   #endif
 
   // Initialize the array pointers
@@ -126,10 +135,8 @@ void setup()
 
   // Set up the interrupt to capture incoming CAN frames
   attachInterrupt(digitalPinToInterrupt(2), irqBATHandler, LOW);
+//  attachInterrupt(digitalPinToInterrupt(3), irqBATHandler, LOW);
   
-  // Output the instructions for frames
-  outputInstructions();
-
   // Populate a number of pre-built CAN frames
   buildCANframe(CANPkg[0],0x000,8,0x00,0x01,0x02,0x03,0x04,0x05,0x06,0x07);
   buildCANframe(CANPkg[1],0x001,8,0x01,0x01,0x02,0x03,0x04,0x05,0x06,0x07);
